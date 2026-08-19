@@ -14,7 +14,7 @@ npm install
 npm run dev
 ```
 
-Abrí [http://localhost:3000](http://localhost:3000).
+Abrí [http://localhost:3003](http://localhost:3003) (o el puerto que muestre la terminal).
 
 ## Variables de entorno
 
@@ -29,5 +29,3 @@ MP_CLIENT_SECRET=
 
 - `GEMINI_API_KEY`: hace falta para el asistente de IA. Creala en [Google AI Studio](https://aistudio.google.com/apikey).
 - `MP_CLIENT_ID` / `MP_CLIENT_SECRET`: solo si vas a conectar Mercado Pago.
-
-Si el login con Google falla, en Firebase Console agregá `localhost` en **Authentication → Settings → Authorized domains**.
