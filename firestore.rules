@@ -1,0 +1,145 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}/transactions
+    // Document ID: auto-generated
+    // Fields:
+    //   - userId: string (required) - The ID of the user who owns this transaction.
+    //   - type: string (required, enum: 'expense', 'income', 'refund', 'saving') - The type of transaction.
+    //   - amount: number (required, > 0) - The amount of the transaction.
+    //   - category: string (required, size < 100) - The category of the transaction.
+    //   - description: string (optional, size < 500) - An optional description.
+    //   - date: string (required, format: YYYY-MM-DD) - The date of the transaction.
+    //   - createdAt: timestamp (required) - When the transaction was created.
+    //
+    // Collection: /users/{userId}/customCategories
+    // Document ID: 'categories'
+    // Fields:
+    //   - userId: string (required) - The ID of the user.
+    //   - expense: list of strings (required, size < 50, each string size < 50)
+    //   - income: list of strings (required, size < 50, each string size < 50)
+    //   - refund: list of strings (required, size < 50, each string size < 50)
+    //   - saving: list of strings (required, size < 50, each string size < 50)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    function uidUnchanged() {
+      return !('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('userId' in request.resource.data) || request.resource.data.userId == resource.data.userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() >= minLen &&
+              request.resource.data[field].size() <= maxLen);
+    }
+
+    function isValidList(list, maxSize, maxStringSize) {
+      return list is list && list.size() <= maxSize &&
+             // Ensure all elements are strings and within maxStringSize
+             (list.size() == 0 || (list[0] is string && list[0].size() <= maxStringSize));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidTransaction(data) {
+      return hasRequiredFields(['userId', 'type', 'amount', 'category', 'date', 'createdAt']) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.type in ['expense', 'income', 'refund', 'saving'] &&
+             data.amount is number && (data.amount > 0 || (data.category == 'Ajuste' && data.amount != 0)) &&
+             validStringLength('category', 1, 100) &&
+             isValidOptionalString('description', 0, 500) &&
+             validStringLength('date', 10, 10) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidCustomCategories(data) {
+      return hasRequiredFields(['userId', 'expense', 'income', 'refund', 'saving']) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             isValidList(data.expense, 50, 50) &&
+             isValidList(data.income, 50, 50) &&
+             isValidList(data.refund, 50, 50) &&
+             isValidList(data.saving, 50, 50);
+    }
+
+    function isValidRecurringTransaction(data) {
+      return hasRequiredFields(['userId', 'type', 'amount', 'category', 'dayOfMonth', 'lastProcessedMonth', 'createdAt']) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.type in ['expense', 'income', 'refund', 'saving'] &&
+             data.amount is number && data.amount > 0 &&
+             validStringLength('category', 1, 100) &&
+             isValidOptionalString('description', 0, 500) &&
+             data.dayOfMonth is number && data.dayOfMonth >= 1 && data.dayOfMonth <= 31 &&
+             validStringLength('lastProcessedMonth', 7, 7) &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{userId} {
+      // Deny direct access to the user document itself, as we don't store one currently
+      allow read, write: if false;
+
+      match /transactions/{transactionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidTransaction(request.resource.data) && uidUnchanged();
+        allow update: if isOwner(userId) && isValidTransaction(request.resource.data) && uidNotModified() && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+
+      match /customCategories/{categoryId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidCustomCategories(request.resource.data) && uidUnchanged();
+        allow update: if isOwner(userId) && isValidCustomCategories(request.resource.data) && uidNotModified();
+        allow delete: if isOwner(userId);
+      }
+
+      match /recurringTransactions/{recurringId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidRecurringTransaction(request.resource.data) && uidUnchanged();
+        allow update: if isOwner(userId) && isValidRecurringTransaction(request.resource.data) && uidNotModified() && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+
+      match /settings/{settingId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+  }
+}

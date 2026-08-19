@@ -1,0 +1,5 @@
+{
+  "name": "Control de Finanzas",
+  "description": "Aplicación para registrar y sumar gastos, ingresos y reembolsos con categorías personalizadas.",
+  "requestFramePermissions": []
+}

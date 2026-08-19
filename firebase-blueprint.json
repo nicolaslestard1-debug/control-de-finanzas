@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A financial transaction (expense, income, refund, saving).",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The ID of the user who owns this transaction."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["expense", "income", "refund", "saving"],
+          "description": "The type of transaction."
+        },
+        "amount": {
+          "type": "number",
+          "description": "The amount of the transaction."
+        },
+        "category": {
+          "type": "string",
+          "description": "The category of the transaction."
+        },
+        "description": {
+          "type": "string",
+          "description": "An optional description of the transaction."
+        },
+        "date": {
+          "type": "string",
+          "description": "The date of the transaction (YYYY-MM-DD)."
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "description": "When the transaction was created."
+        }
+      },
+      "required": ["userId", "type", "amount", "category", "date", "createdAt"]
+    },
+    "CustomCategories": {
+      "title": "Custom Categories",
+      "description": "User-defined custom categories for transactions.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The ID of the user."
+        },
+        "expense": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "income": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "refund": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "saving": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["userId", "expense", "income", "refund", "saving"]
+    },
+    "RecurringTransaction": {
+      "title": "Recurring Transaction",
+      "description": "A transaction that repeats monthly.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The ID of the user who owns this recurring transaction."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["expense", "income", "refund", "saving"],
+          "description": "The type of transaction."
+        },
+        "amount": {
+          "type": "number",
+          "description": "The amount of the transaction."
+        },
+        "category": {
+          "type": "string",
+          "description": "The category of the transaction."
+        },
+        "description": {
+          "type": "string",
+          "description": "An optional description of the transaction."
+        },
+        "dayOfMonth": {
+          "type": "number",
+          "description": "The day of the month this transaction should occur."
+        },
+        "lastProcessedMonth": {
+          "type": "string",
+          "description": "The last month this transaction was processed (YYYY-MM)."
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "description": "When the recurring transaction was created."
+        }
+      },
+      "required": ["userId", "type", "amount", "category", "dayOfMonth", "lastProcessedMonth", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Transactions belonging to a specific user."
+    },
+    "/users/{userId}/customCategories/categories": {
+      "schema": { "$ref": "#/entities/CustomCategories" },
+      "description": "Custom categories defined by a specific user."
+    },
+    "/users/{userId}/recurringTransactions/{recurringId}": {
+      "schema": { "$ref": "#/entities/RecurringTransaction" },
+      "description": "Recurring transactions belonging to a specific user."
+    }
+  }
+}
