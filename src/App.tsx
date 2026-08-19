@@ -804,10 +804,15 @@ export default function App() {
       writeLocal(path, data, mode);
       return;
     }
-    if (mode === 'update') {
-      await updateDoc(doc(db, path), data);
-    } else {
-      await setDoc(doc(db, path), data);
+    try {
+      if (mode === 'update') {
+        await updateDoc(doc(db, path), data);
+      } else {
+        await setDoc(doc(db, path), data);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
     }
   };
 
