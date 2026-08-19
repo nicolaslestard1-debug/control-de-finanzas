@@ -780,7 +780,7 @@ export default function App() {
       const message = error instanceof Error ? error.message : String(error);
       let text = `No se pudo iniciar sesión: ${message.slice(0, 120)}`;
       if (code === 'auth/unauthorized-domain') {
-        text = 'Firebase no autoriza localhost en este proyecto. Entrá a la app publicada (link de abajo) con Google, en la compu y en el celular.';
+        text = `Firebase no autoriza este sitio (${window.location.hostname}). En Firebase → Autenticación → Settings → Authorized domains agregá exactamente ese dominio.`;
       } else if (code === 'auth/popup-blocked') {
         text = 'Chrome bloqueó la ventana de Google. Permití popups y volvé a intentar.';
       } else if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
