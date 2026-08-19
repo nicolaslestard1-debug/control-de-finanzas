@@ -7,7 +7,6 @@ coverage/
 .tmp/
 .env*
 !.env.example
-firebase-applet-config.json
 data/
 *.mov
 user-recording.*

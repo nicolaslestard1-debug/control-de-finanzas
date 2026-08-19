@@ -552,20 +552,40 @@ export default function App() {
   }, []);
 
   const [accessUrls, setAccessUrls] = useState<string[]>([]);
+  const runningLocally = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  );
 
   // Auth Listener
   useEffect(() => {
-    enableLocalMode();
-    setUser(LOCAL_USER as unknown as User);
-    setIsAuthReady(true);
-    hydrateFromServer();
-    fetch('/api/info')
-      .then((res) => res.ok ? res.json() : null)
-      .then((info) => {
-        if (info?.urls) setAccessUrls(info.urls.filter((url: string) => !url.includes('localhost')));
+    if (runningLocally) {
+      enableLocalMode();
+      setUser(LOCAL_USER as unknown as User);
+      setIsAuthReady(true);
+      hydrateFromServer();
+      fetch('/api/info')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((info) => {
+          if (info?.urls) setAccessUrls(info.urls.filter((url: string) => !url.includes('localhost')));
+        })
+        .catch(() => {});
+      return;
+    }
+
+    getRedirectResult(auth)
+      .then((result) => {
+        if (!result) return;
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) setGoogleAccessToken(credential.accessToken);
       })
-      .catch(() => {});
-  }, []);
+      .catch((error) => console.error('Google redirect login failed', error));
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, [runningLocally]);
 
   // Data Fetching
   useEffect(() => {
@@ -1751,7 +1771,7 @@ export default function App() {
             <Wallet size={32} />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 mb-2">Control de Finanzas</h1>
-          <p className="text-zinc-500 dark:text-zinc-400 mb-6">Entrá con Google para ver las mismas finanzas en la computadora y el celular.</p>
+          <p className="text-zinc-500 dark:text-zinc-400 mb-6">Entrá con Google para ver las mismas finanzas en la computadora y el celular, también con datos móviles.</p>
           {loginError && (
             <p className="text-sm text-rose-500 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl px-3 py-2 mb-4">{loginError}</p>
           )}
@@ -1762,21 +1782,6 @@ export default function App() {
             <LogIn size={18} />
             Continuar con Google
           </button>
-          <a
-            href="https://ai.studio/apps/811a6fde-6412-4c4b-8db4-0a554e3d907f"
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-flex items-center justify-center gap-2 text-sm text-violet-500 hover:text-violet-400"
-          >
-            Abrir en el celular (misma cuenta)
-            <ExternalLink size={14} />
-          </a>
-          <button
-            onClick={handleLocalMode}
-            className="w-full mt-6 text-sm text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-          >
-            Seguir solo en este dispositivo (no se sincroniza)
-          </button>
         </div>
       </div>
     );
@@ -1786,6 +1791,11 @@ export default function App() {
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans pb-12 transition-colors duration-200">
       {/* Header */}
       <header className="bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 sticky top-0 z-10 transition-colors duration-200">
+        {accessUrls[0] && (
+          <p className="max-w-7xl mx-auto mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+            En el celular (Safari): abrí {accessUrls[0]} → Compartir → Agregar a inicio
+          </p>
+        )}
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 p-2 rounded-xl">
