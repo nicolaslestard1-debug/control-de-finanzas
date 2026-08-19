@@ -5,5 +5,6 @@
   "authDomain": "gen-lang-client-0033257050.firebaseapp.com",
   "storageBucket": "gen-lang-client-0033257050.firebasestorage.app",
   "messagingSenderId": "22361979653",
-  "measurementId": ""
+  "measurementId": "",
+  "firestoreDatabaseId": "ai-studio-811a6fde-6412-4c4b-8db4-0a554e3d907f"
 }
