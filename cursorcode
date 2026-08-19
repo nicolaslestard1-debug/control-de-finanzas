@@ -1,0 +1,6 @@
+cd ~/control-de-finanzas
+git init -b main
+git add -A
+git commit -m "Initial commit"
+git remote add origin https://github.com/nicolaslestard1-debug/control-de-finanzas/
+git push -u origin main
