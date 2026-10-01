@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Plus, ArrowDownCircle, ArrowUpCircle, RefreshCcw, Trash2, Wallet,
   Calendar, Tag, AlignLeft, X, Download, PiggyBank, BarChart3,
-  PieChart as PieChartIcon, Filter, LogOut, LogIn, Moon, Sun,
-  Edit2, CreditCard, RefreshCw, Handshake, DollarSign, ChevronDown, Search, FileSpreadsheet, ExternalLink, Settings
+  PieChart as PieChartIcon,   Filter, LogOut, LogIn, Moon, Sun,
+  Edit2, CreditCard, RefreshCw, Handshake, DollarSign, ChevronDown, Search, FileSpreadsheet, ExternalLink, Settings, Pin
 } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -11,6 +11,7 @@ import { auth, db, googleProvider } from './firebase';
 import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, User, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
 import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer } from 'firebase/firestore';
 import { LOCAL_USER, isLocalUser, enableLocalMode, subscribeLocal, readLocal, writeLocal, deleteLocal, hydrateFromServer } from './localStore';
+import { formatPeriodLabel, isRangeInvalid, parsePinnedPeriod, PINNED_PERIOD_KEY, transactionInPeriod, type PinnedPeriod, type TimeFilter } from './periodFilter';
 
 const FinancialAnalysis = ({ transactions, balance, periodLabel, expandedBox }: { transactions: Transaction[], balance: number, periodLabel: string, expandedBox: TransactionType | 'balance' | null }) => {
   const [expenseMetric, setExpenseMetric] = useState<'amount' | 'count'>('amount');
@@ -262,6 +263,141 @@ function googleLoginErrorText(error: unknown): string {
     return 'Cerrá Control de Finanzas.app y abrí localhost:3001 en una pestaña de Chrome.';
   }
   return `No se pudo iniciar sesión: ${message.slice(0, 120)}`;
+}
+
+function PeriodFilter({
+  className = '',
+  stacked = false,
+  timeFilter,
+  onTimeFilter,
+  startDate,
+  endDate,
+  onStartDate,
+  onEndDate,
+  rangeInvalid,
+  isPinned,
+  hasSavedPin,
+  savedPinLabel,
+  onPin,
+  onUnpin,
+  onRestore,
+}: {
+  className?: string;
+  stacked?: boolean;
+  timeFilter: TimeFilter;
+  onTimeFilter: (value: TimeFilter) => void;
+  startDate: string;
+  endDate: string;
+  onStartDate: (value: string) => void;
+  onEndDate: (value: string) => void;
+  rangeInvalid: boolean;
+  isPinned: boolean;
+  hasSavedPin: boolean;
+  savedPinLabel: string;
+  onPin: () => void;
+  onUnpin: () => void;
+  onRestore: () => void;
+}) {
+  const canPin = Boolean(startDate || endDate) && !rangeInvalid;
+  const dateInputClass = 'mt-1 block w-full bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200 outline-none dark:[color-scheme:dark]';
+
+  return (
+    <div className={stacked ? 'flex flex-col gap-2 w-full' : `relative items-center gap-2 ${className}`}>
+      <div className={`flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 px-3 py-2 rounded-xl ${stacked ? 'w-full' : ''}`}>
+        <Filter size={16} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
+        <select
+          aria-label="Período"
+          value={timeFilter}
+          onChange={(e) => onTimeFilter(e.target.value as TimeFilter)}
+          className="bg-transparent text-sm font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer w-full"
+        >
+          <option value="all">Todo el tiempo</option>
+          <option value="year">Este año</option>
+          <option value="month">Este mes</option>
+          <option value="week">Últimos 7 días</option>
+          <option value="custom">Personalizado</option>
+        </select>
+        {isPinned && <Pin size={14} className="text-zinc-900 dark:text-zinc-100 shrink-0" aria-label="Período fijado" />}
+      </div>
+
+      {hasSavedPin && timeFilter !== 'custom' && (
+        <button
+          type="button"
+          onClick={onRestore}
+          title={savedPinLabel}
+          className={`flex items-center justify-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 px-3 py-2 rounded-xl ${stacked ? 'w-full flex-wrap' : ''}`}
+        >
+          <Pin size={14} />
+          Volver al período fijado
+          {savedPinLabel ? <span className="text-zinc-500 dark:text-zinc-400">({savedPinLabel})</span> : null}
+        </button>
+      )}
+
+      {timeFilter === 'custom' && (
+        <div
+          className={
+            stacked
+              ? 'space-y-2 bg-zinc-100 dark:bg-zinc-800 px-3 py-3 rounded-xl'
+              : 'absolute right-0 top-full mt-2 z-30 w-72 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-lg rounded-xl p-3 space-y-2'
+          }
+        >
+          <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            Desde
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => onStartDate(e.target.value)}
+              className={dateInputClass}
+            />
+          </label>
+          <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            Hasta
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => onEndDate(e.target.value)}
+              className={dateInputClass}
+            />
+          </label>
+          <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+            Si dejás Hasta vacío, el período sigue abierto.
+          </p>
+          {rangeInvalid && (
+            <p className="text-[11px] leading-snug text-rose-500">
+              La fecha de inicio es posterior a la de fin.
+            </p>
+          )}
+          <div className="flex items-center gap-2 pt-1">
+            {isPinned ? (
+              <>
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-zinc-800 dark:text-zinc-100">
+                  <Pin size={12} />
+                  Fijado
+                </span>
+                <button
+                  type="button"
+                  onClick={onUnpin}
+                  className="ml-auto text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-800 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-100"
+                >
+                  Quitar
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={onPin}
+                disabled={!canPin}
+                className="inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Pin size={12} />
+                Fijar
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function App() {
@@ -539,9 +675,22 @@ export default function App() {
     }
   };
 
-  const [timeFilter, setTimeFilter] = useState<'all' | 'year' | 'month' | 'week' | 'custom'>('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [pinnedPeriod, setPinnedPeriod] = useState<PinnedPeriod | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return parsePinnedPeriod(localStorage.getItem(PINNED_PERIOD_KEY));
+  });
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>(() => {
+    if (typeof window === 'undefined') return 'all';
+    return parsePinnedPeriod(localStorage.getItem(PINNED_PERIOD_KEY)) ? 'custom' : 'all';
+  });
+  const [startDate, setStartDate] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return parsePinnedPeriod(localStorage.getItem(PINNED_PERIOD_KEY))?.start ?? '';
+  });
+  const [endDate, setEndDate] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return parsePinnedPeriod(localStorage.getItem(PINNED_PERIOD_KEY))?.end ?? '';
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -1131,33 +1280,7 @@ export default function App() {
 
   // Calculations
   const timeFilteredTransactions = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
-    const sevenDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
-
-    return transactions.filter(t => {
-      const [year, month, day] = t.date.split('-').map(Number);
-      const txDateObj = new Date(year, month - 1, day);
-      
-      if (timeFilter === 'year') {
-        return year === currentYear;
-      } else if (timeFilter === 'month') {
-        return year === currentYear && month === currentMonth + 1;
-      } else if (timeFilter === 'week') {
-        return txDateObj >= sevenDaysAgo;
-      } else if (timeFilter === 'custom') {
-        if (!startDate && !endDate) return true;
-        
-        const start = startDate ? new Date(startDate + 'T00:00:00') : null;
-        const end = endDate ? new Date(endDate + 'T23:59:59') : null;
-        
-        if (start && txDateObj < start) return false;
-        if (end && txDateObj > end) return false;
-        return true;
-      }
-      return true;
-    });
+    return transactions.filter(t => transactionInPeriod(t.date, timeFilter, startDate, endDate));
   }, [transactions, timeFilter, startDate, endDate]);
 
   const filteredTransactions = useMemo(() => {
@@ -1797,6 +1920,39 @@ export default function App() {
     }));
   }, [expandedBox, totalIncome, totalRefund, totalExpense, totalSaving, boxBreakdown]);
 
+  const rangeInvalid = timeFilter === 'custom' && isRangeInvalid(startDate, endDate);
+  const activePeriodLabel = formatPeriodLabel(timeFilter, startDate, endDate);
+  const isPinned = !!(
+    pinnedPeriod &&
+    timeFilter === 'custom' &&
+    pinnedPeriod.start === startDate &&
+    pinnedPeriod.end === endDate
+  );
+
+  const pinPeriod = () => {
+    if (!startDate && !endDate) return;
+    if (isRangeInvalid(startDate, endDate)) return;
+    const next = { start: startDate, end: endDate };
+    localStorage.setItem(PINNED_PERIOD_KEY, JSON.stringify(next));
+    setPinnedPeriod(next);
+    setTimeFilter('custom');
+  };
+
+  const unpinPeriod = () => {
+    localStorage.removeItem(PINNED_PERIOD_KEY);
+    setPinnedPeriod(null);
+    setTimeFilter('all');
+    setStartDate('');
+    setEndDate('');
+  };
+
+  const restorePinnedPeriod = () => {
+    if (!pinnedPeriod) return;
+    setTimeFilter('custom');
+    setStartDate(pinnedPeriod.start);
+    setEndDate(pinnedPeriod.end);
+  };
+
   if (!isAuthReady) {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center">
@@ -1859,39 +2015,22 @@ export default function App() {
             >
               {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <div className="hidden md:flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 px-3 py-2 rounded-xl">
-              <Filter size={16} className="text-zinc-500 dark:text-zinc-400" />
-              <div className="flex items-center gap-3">
-                <select
-                  value={timeFilter}
-                  onChange={(e) => setTimeFilter(e.target.value as any)}
-                  className="bg-transparent text-sm font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer"
-                >
-                  <option value="all">Todo el tiempo</option>
-                  <option value="year">Este año</option>
-                  <option value="month">Este mes</option>
-                  <option value="week">Últimos 7 días</option>
-                  <option value="custom">Personalizado</option>
-                </select>
-                {timeFilter === 'custom' && (
-                  <div className="flex items-center gap-2 border-l border-zinc-200 dark:border-zinc-700 pl-3 animate-in fade-in slide-in-from-left-2 duration-200">
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      className="bg-transparent text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer"
-                    />
-                    <span className="text-zinc-400 text-xs">a</span>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      className="bg-transparent text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
+            <PeriodFilter
+              className="hidden md:flex"
+              timeFilter={timeFilter}
+              onTimeFilter={setTimeFilter}
+              startDate={startDate}
+              endDate={endDate}
+              onStartDate={setStartDate}
+              onEndDate={setEndDate}
+              rangeInvalid={rangeInvalid}
+              isPinned={isPinned}
+              hasSavedPin={!!pinnedPeriod}
+              savedPinLabel={pinnedPeriod ? formatPeriodLabel('custom', pinnedPeriod.start, pinnedPeriod.end) : ''}
+              onPin={pinPeriod}
+              onUnpin={unpinPeriod}
+              onRestore={restorePinnedPeriod}
+            />
             <button
               onClick={() => isMPLinked ? handleMPSync() : setShowMPModal(true)}
               disabled={isSyncingMP}
@@ -2018,37 +2157,22 @@ export default function App() {
         
         {/* Mobile Filter */}
         <div className="md:hidden mt-4 space-y-3">
-          <div className="flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 px-3 py-2 rounded-xl">
-            <Filter size={16} className="text-zinc-500 dark:text-zinc-400" />
-            <select
-              value={timeFilter}
-              onChange={(e) => setTimeFilter(e.target.value as any)}
-              className="bg-transparent text-sm font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer w-full"
-            >
-              <option value="all">Todo el tiempo</option>
-              <option value="year">Este año</option>
-              <option value="month">Este mes</option>
-              <option value="week">Últimos 7 días</option>
-              <option value="custom">Personalizado</option>
-            </select>
-          </div>
-          {timeFilter === 'custom' && (
-            <div className="flex items-center justify-between gap-2 bg-zinc-100 dark:bg-zinc-800 px-3 py-2 rounded-xl animate-in fade-in slide-in-from-top-2 duration-200">
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="bg-transparent text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer w-full"
-              />
-              <span className="text-zinc-400 text-xs px-2">a</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="bg-transparent text-xs font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer w-full"
-              />
-            </div>
-          )}
+          <PeriodFilter
+            stacked
+            timeFilter={timeFilter}
+            onTimeFilter={setTimeFilter}
+            startDate={startDate}
+            endDate={endDate}
+            onStartDate={setStartDate}
+            onEndDate={setEndDate}
+            rangeInvalid={rangeInvalid}
+            isPinned={isPinned}
+            hasSavedPin={!!pinnedPeriod}
+            savedPinLabel={pinnedPeriod ? formatPeriodLabel('custom', pinnedPeriod.start, pinnedPeriod.end) : ''}
+            onPin={pinPeriod}
+            onUnpin={unpinPeriod}
+            onRestore={restorePinnedPeriod}
+          />
           {sheetConfig && (
             <a
               href={sheetConfig.url}
@@ -2726,7 +2850,7 @@ export default function App() {
                   )}
                 </div>
                 <span className="text-sm text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-3 py-1 rounded-full">
-                  {filteredTransactions.length} registros
+                  {filteredTransactions.length} registros · {activePeriodLabel}
                 </span>
               </div>
               
@@ -2902,7 +3026,7 @@ export default function App() {
           <FinancialAnalysis 
             transactions={filteredTransactions} 
             balance={balance} 
-            periodLabel={timeFilter === 'all' ? 'Todo' : timeFilter === 'month' ? 'Mes' : 'Semana'} 
+            periodLabel={activePeriodLabel} 
             expandedBox={expandedBox}
           />
         )}
