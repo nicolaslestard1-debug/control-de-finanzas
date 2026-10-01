@@ -1,13 +1,14 @@
 {
-  "rewrites": [
+  "routes": [
     {
-      "source": "/__/auth/:path*",
-      "destination": "https://gen-lang-client-0033257050.firebaseapp.com/__/auth/:path*"
+      "src": "/__/auth/(.*)",
+      "dest": "https://gen-lang-client-0033257050.firebaseapp.com/__/auth/$1"
     },
     {
-      "source": "/__/firebase/:path*",
-      "destination": "https://gen-lang-client-0033257050.firebaseapp.com/__/firebase/:path*"
+      "src": "/__/firebase/(.*)",
+      "dest": "https://gen-lang-client-0033257050.firebaseapp.com/__/firebase/$1"
     },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
