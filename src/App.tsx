@@ -298,8 +298,20 @@ function PeriodFilter({
   onUnpin: () => void;
   onRestore: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const canPin = Boolean(startDate || endDate) && !rangeInvalid;
   const dateInputClass = 'mt-1 block w-full bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200 outline-none dark:[color-scheme:dark]';
+
+  const chooseFilter = (value: TimeFilter) => {
+    onTimeFilter(value);
+    setOpen(value === 'custom');
+  };
+
+  const pinAndClose = () => {
+    if (!canPin) return;
+    onPin();
+    setOpen(false);
+  };
 
   return (
     <div className={stacked ? 'flex flex-col gap-2 w-full' : `relative items-center gap-2 ${className}`}>
@@ -308,7 +320,7 @@ function PeriodFilter({
         <select
           aria-label="Período"
           value={timeFilter}
-          onChange={(e) => onTimeFilter(e.target.value as TimeFilter)}
+          onChange={(e) => chooseFilter(e.target.value as TimeFilter)}
           className="bg-transparent text-sm font-medium text-zinc-700 dark:text-zinc-300 outline-none cursor-pointer w-full"
         >
           <option value="all">Todo el tiempo</option>
@@ -318,6 +330,17 @@ function PeriodFilter({
           <option value="custom">Personalizado</option>
         </select>
         {isPinned && <Pin size={14} className="text-zinc-900 dark:text-zinc-100 shrink-0" aria-label="Período fijado" />}
+        {timeFilter === 'custom' && (
+          <button
+            type="button"
+            aria-label={open ? 'Minimizar período' : 'Editar período'}
+            aria-expanded={open}
+            onClick={() => setOpen((current) => !current)}
+            className="p-0.5 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            <ChevronDown size={16} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+          </button>
+        )}
       </div>
 
       {hasSavedPin && timeFilter !== 'custom' && (
@@ -333,7 +356,7 @@ function PeriodFilter({
         </button>
       )}
 
-      {timeFilter === 'custom' && (
+      {timeFilter === 'custom' && open && (
         <div
           className={
             stacked
@@ -341,6 +364,16 @@ function PeriodFilter({
               : 'absolute right-0 top-full mt-2 z-30 w-72 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-lg rounded-xl p-3 space-y-2'
           }
         >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Período</span>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-xs font-medium px-2 py-1 rounded-lg text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Minimizar
+            </button>
+          </div>
           <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">
             Desde
             <input
@@ -385,7 +418,7 @@ function PeriodFilter({
             ) : (
               <button
                 type="button"
-                onClick={onPin}
+                onClick={pinAndClose}
                 disabled={!canPin}
                 className="inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed"
               >
