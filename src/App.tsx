@@ -8,7 +8,7 @@ import {
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 import { auth, db, googleProvider } from './firebase';
-import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, User, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
+import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, User, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
 import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer } from 'firebase/firestore';
 import { LOCAL_USER, isLocalUser, enableLocalMode, subscribeLocal, readLocal, writeLocal, deleteLocal, hydrateFromServer } from './localStore';
 
@@ -241,10 +241,34 @@ const getGroupedCategory = (category: string, type: TransactionType, description
   return category;
 };
 
+const GOOGLE_LOGIN_FLAG = 'finanzas.googleLogin';
+
+function googleLoginErrorText(error: unknown): string {
+  const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: string }).code) : '';
+  const message = error instanceof Error ? error.message : String(error);
+  if (code === 'auth/unauthorized-domain') {
+    return `Firebase no autoriza este sitio (${window.location.hostname}). En Firebase → Autenticación → Settings → Authorized domains agregá exactamente ese dominio.`;
+  }
+  if (code === 'auth/popup-blocked') {
+    return 'El navegador bloqueó la ventana de Google. Permití popups y volvé a intentar.';
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return 'Inicio de sesión cancelado. Si viste una pantalla en blanco, volvé a tocar Continuar con Google.';
+  }
+  if (code === 'auth/network-request-failed') {
+    return 'No se pudo conectar con Google. Revisá la red y volvé a intentar.';
+  }
+  if (message.toLowerCase().includes('requested action is invalid')) {
+    return 'Cerrá Control de Finanzas.app y abrí localhost:3001 en una pestaña de Chrome.';
+  }
+  return `No se pudo iniciar sesión: ${message.slice(0, 120)}`;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error' | 'info'; message: string }>>([]);
 
@@ -572,20 +596,33 @@ export default function App() {
       return;
     }
 
-    getRedirectResult(auth)
+    getRedirectResult(auth, browserPopupRedirectResolver)
       .then((result) => {
-        if (!result) return;
+        const pending = sessionStorage.getItem(GOOGLE_LOGIN_FLAG);
+        sessionStorage.removeItem(GOOGLE_LOGIN_FLAG);
+        if (!result) {
+          if (pending) {
+            setLoginError('Google no terminó el inicio de sesión. En el iPhone Safari bloquea el salto a firebaseapp.com; volvé a intentar.');
+          }
+          return;
+        }
         const credential = GoogleAuthProvider.credentialFromResult(result);
         if (credential?.accessToken) setGoogleAccessToken(credential.accessToken);
       })
-      .catch((error) => console.error('Google redirect login failed', error));
+      .catch((error) => {
+        sessionStorage.removeItem(GOOGLE_LOGIN_FLAG);
+        console.error('Google redirect login failed', error);
+        const text = googleLoginErrorText(error);
+        setLoginError(text);
+        showToast(text, 'error');
+      });
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setIsAuthReady(true);
     });
     return () => unsubscribe();
-  }, [runningLocally]);
+  }, [runningLocally, showToast]);
 
   // Data Fetching
   useEffect(() => {
@@ -763,33 +800,25 @@ export default function App() {
 
   const handleLogin = async () => {
     setLoginError(null);
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    setIsLoggingIn(true);
     try {
-      if (isMobile) {
-        await signInWithRedirect(auth, googleProvider);
-        return;
-      }
+      sessionStorage.setItem(GOOGLE_LOGIN_FLAG, '1');
+      // Popup keeps the session on this origin. Redirect to *.firebaseapp.com
+      // fails on iOS Safari (ITP): white helper page, then back with no user.
       const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+      sessionStorage.removeItem(GOOGLE_LOGIN_FLAG);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (credential?.accessToken) {
         setGoogleAccessToken(credential.accessToken);
       }
     } catch (error) {
+      sessionStorage.removeItem(GOOGLE_LOGIN_FLAG);
       console.error("Error logging in", error);
-      const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: string }).code) : '';
-      const message = error instanceof Error ? error.message : String(error);
-      let text = `No se pudo iniciar sesión: ${message.slice(0, 120)}`;
-      if (code === 'auth/unauthorized-domain') {
-        text = `Firebase no autoriza este sitio (${window.location.hostname}). En Firebase → Autenticación → Settings → Authorized domains agregá exactamente ese dominio.`;
-      } else if (code === 'auth/popup-blocked') {
-        text = 'Chrome bloqueó la ventana de Google. Permití popups y volvé a intentar.';
-      } else if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-        text = 'Inicio de sesión cancelado.';
-      } else if (message.toLowerCase().includes('requested action is invalid')) {
-        text = 'Cerrá Control de Finanzas.app y abrí localhost:3001 en una pestaña de Chrome.';
-      }
+      const text = googleLoginErrorText(error);
       setLoginError(text);
       showToast(text, 'error');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -1782,10 +1811,11 @@ export default function App() {
           )}
           <button
             onClick={handleLogin}
-            className="w-full flex items-center justify-center gap-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 py-3 px-4 rounded-xl hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors font-medium"
+            disabled={isLoggingIn}
+            className="w-full flex items-center justify-center gap-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 py-3 px-4 rounded-xl hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors font-medium disabled:opacity-60"
           >
             <LogIn size={18} />
-            Continuar con Google
+            {isLoggingIn ? 'Conectando…' : 'Continuar con Google'}
           </button>
         </div>
       </div>
