@@ -8,7 +8,7 @@ import {
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 import { auth, db, googleProvider } from './firebase';
-import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, User, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, User, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
 import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer } from 'firebase/firestore';
 import { LOCAL_USER, isLocalUser, enableLocalMode, subscribeLocal, readLocal, writeLocal, deleteLocal, hydrateFromServer } from './localStore';
 
@@ -602,7 +602,7 @@ export default function App() {
         sessionStorage.removeItem(GOOGLE_LOGIN_FLAG);
         if (!result) {
           if (pending) {
-            setLoginError('Google no terminó el inicio de sesión. En el iPhone Safari bloquea el salto a firebaseapp.com; volvé a intentar.');
+            setLoginError('Google no terminó el inicio de sesión. Volvé a intentar desde Safari.');
           }
           return;
         }
@@ -803,8 +803,11 @@ export default function App() {
     setIsLoggingIn(true);
     try {
       sessionStorage.setItem(GOOGLE_LOGIN_FLAG, '1');
-      // Popup keeps the session on this origin. Redirect to *.firebaseapp.com
-      // fails on iOS Safari (ITP): white helper page, then back with no user.
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        await signInWithRedirect(auth, googleProvider);
+        return;
+      }
       const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
       sessionStorage.removeItem(GOOGLE_LOGIN_FLAG);
       const credential = GoogleAuthProvider.credentialFromResult(result);
