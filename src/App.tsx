@@ -250,7 +250,7 @@ function googleLoginErrorText(error: unknown): string {
     return `Firebase no autoriza este sitio (${window.location.hostname}). En Firebase → Autenticación → Settings → Authorized domains agregá exactamente ese dominio.`;
   }
   if (code === 'auth/popup-blocked') {
-    return 'El navegador bloqueó la ventana de Google. Permití popups y volvé a intentar.';
+    return 'Chrome bloqueó la ventana de Google. Permití ventanas emergentes para este sitio y volvé a tocar Continuar con Google.';
   }
   if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
     return 'Inicio de sesión cancelado. Si viste una pantalla en blanco, volvé a tocar Continuar con Google.';
@@ -803,8 +803,13 @@ export default function App() {
     setIsLoggingIn(true);
     try {
       sessionStorage.setItem(GOOGLE_LOGIN_FLAG, '1');
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (isMobile) {
+      const ua = navigator.userAgent;
+      const isChromeIOS = /CriOS/.test(ua);
+      const isMobile = /Android|iPhone|iPad|iPod/.test(ua);
+      // Chrome on iPhone rewrites a full-page hop to accounts.google.com and
+      // Google answers 400. A new tab (popup) keeps the OAuth URL intact.
+      // Safari still uses redirect: a popup there gets blocked.
+      if (isMobile && !isChromeIOS) {
         await signInWithRedirect(auth, googleProvider);
         return;
       }
