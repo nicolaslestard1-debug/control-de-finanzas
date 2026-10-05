@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Plus, ArrowDownCircle, ArrowUpCircle, RefreshCcw, Trash2, Wallet,
   Calendar, Tag, AlignLeft, X, Download, PiggyBank, BarChart3,
@@ -9,9 +9,12 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 import * as XLSX from 'xlsx';
 import { auth, db, googleProvider } from './firebase';
 import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, User, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
-import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer, runTransaction } from 'firebase/firestore';
 import { LOCAL_USER, isLocalUser, enableLocalMode, subscribeLocal, readLocal, writeLocal, deleteLocal, hydrateFromServer } from './localStore';
 import { formatPeriodLabel, isRangeInvalid, parsePinnedPeriod, PINNED_PERIOD_KEY, transactionInPeriod, type PinnedPeriod, type TimeFilter } from './periodFilter';
+import { automaticDuplicateIds, calendarMonth, chargeDate, dayFromIsoDate, monthFromIsoDate, recurringChargeId, shouldGenerateRecurring } from './recurring';
+
+const recurringInFlight = new Set<string>();
 
 const FinancialAnalysis = ({ transactions, balance, periodLabel, expandedBox }: { transactions: Transaction[], balance: number, periodLabel: string, expandedBox: TransactionType | 'balance' | null }) => {
   const [expenseMetric, setExpenseMetric] = useState<'amount' | 'count'>('amount');
@@ -912,39 +915,47 @@ export default function App() {
   // Recurring Transactions Processor
   useEffect(() => {
     if (!isAuthReady || !user || isLocalUser(user)) return;
-    
+
     const recurringPath = `users/${user.uid}/recurringTransactions`;
     const q = query(collection(db, recurringPath));
-    
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-      const currentDay = new Date().getDate();
-      
-      snapshot.forEach(async (docSnap) => {
+      snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        if (data.lastProcessedMonth !== currentMonth && currentDay >= data.dayOfMonth) {
-          const txId = crypto.randomUUID();
-          const txPath = `users/${user.uid}/transactions/${txId}`;
-          const txDate = `${currentMonth}-${String(data.dayOfMonth).padStart(2, '0')}`;
-          
-          try {
-            await setDoc(doc(db, txPath), {
-              userId: user.uid,
-              type: data.type,
-              amount: data.amount,
-              category: data.category,
-              description: data.description + ' (Automático)',
-              date: txDate,
-              createdAt: serverTimestamp()
-            });
-            
-            await updateDoc(doc(db, recurringPath, docSnap.id), {
-              lastProcessedMonth: currentMonth
-            });
-          } catch (error) {
-            console.error("Error processing recurring transaction", error);
-          }
-        }
+        const now = new Date();
+        if (!shouldGenerateRecurring(data.lastProcessedMonth, data.dayOfMonth, now)) return;
+
+        const month = calendarMonth(now);
+        const flightKey = `${user.uid}:${docSnap.id}:${month}`;
+        if (recurringInFlight.has(flightKey)) return;
+        recurringInFlight.add(flightKey);
+
+        const recurringRef = doc(db, recurringPath, docSnap.id);
+        const txRef = doc(db, `users/${user.uid}/transactions/${recurringChargeId(docSnap.id, month)}`);
+
+        runTransaction(db, async (transaction) => {
+          const fresh = await transaction.get(recurringRef);
+          if (!fresh.exists()) return;
+          const freshData = fresh.data();
+          const freshNow = new Date();
+          if (!shouldGenerateRecurring(freshData.lastProcessedMonth, freshData.dayOfMonth, freshNow)) return;
+          const freshMonth = calendarMonth(freshNow);
+          transaction.set(txRef, {
+            userId: user.uid,
+            type: freshData.type,
+            amount: freshData.amount,
+            category: freshData.category,
+            description: `${freshData.description} (Automático)`,
+            date: chargeDate(freshMonth, Number(freshData.dayOfMonth)),
+            recurringId: docSnap.id,
+            createdAt: serverTimestamp()
+          });
+          transaction.update(recurringRef, { lastProcessedMonth: freshMonth });
+        }).catch((error) => {
+          console.error("Error processing recurring transaction", error);
+        }).finally(() => {
+          recurringInFlight.delete(flightKey);
+        });
       });
     }, (error) => {
       console.error("Error fetching recurring transactions", error);
@@ -1042,6 +1053,27 @@ export default function App() {
     }
     await deleteDoc(doc(db, path));
   };
+
+  const removedAutomaticIds = useRef(new Set<string>());
+  useEffect(() => {
+    if (!user || !isAuthReady) return;
+    const extra = automaticDuplicateIds(transactions).filter((id) => !removedAutomaticIds.current.has(id));
+    if (extra.length === 0) return;
+    extra.forEach((id) => removedAutomaticIds.current.add(id));
+    Promise.all(extra.map((id) => persistDelete(`users/${user.uid}/transactions/${id}`)))
+      .then(() => {
+        showToast(
+          extra.length === 1
+            ? 'Saqué un gasto automático repetido.'
+            : `Saqué ${extra.length} gastos automáticos repetidos.`,
+          'info'
+        );
+      })
+      .catch((error) => {
+        extra.forEach((id) => removedAutomaticIds.current.delete(id));
+        console.error('Error removing duplicate automatic expenses', error);
+      });
+  }, [user, isAuthReady, transactions, showToast]);
 
   const handleLogout = async () => {
     try {
@@ -1146,8 +1178,8 @@ export default function App() {
             amount: finalAmount,
             category: finalCategory,
             description: description || 'Sin descripción',
-            dayOfMonth: new Date(date).getDate(),
-            lastProcessedMonth: new Date(date).toISOString().slice(0, 7),
+            dayOfMonth: dayFromIsoDate(date),
+            lastProcessedMonth: monthFromIsoDate(date),
             createdAt: serverTimestamp()
           });
         }
