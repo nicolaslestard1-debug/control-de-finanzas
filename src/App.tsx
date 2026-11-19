@@ -12,7 +12,7 @@ import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuth
 import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer, runTransaction } from 'firebase/firestore';
 import { LOCAL_USER, isLocalUser, enableLocalMode, subscribeLocal, readLocal, writeLocal, deleteLocal, hydrateFromServer } from './localStore';
 import { formatPeriodLabel, isRangeInvalid, parsePinnedPeriod, PINNED_PERIOD_KEY, transactionInPeriod, type PinnedPeriod, type TimeFilter } from './periodFilter';
-import { automaticDescription, automaticDuplicateIds, chargeDate, dayFromIsoDate, dueMonths, formatDayShort, formatMonthShort, hasInstallments, installmentTag, isRuleActive, lastInstallmentMonth, monthFromIsoDate, nextChargeDate, recurringChargeId, type RecurringRule } from './recurring';
+import { automaticDescription, automaticDuplicateIds, chargeDate, dayFromIsoDate, dueMonths, formatDayShort, formatMonthShort, hasInstallments, installmentTag, isRuleActive, lastInstallmentMonth, MAX_INSTALLMENTS, monthFromIsoDate, nextChargeDate, recurringChargeId, ruleEditUpdate, type RecurringRule, type RuleEdit } from './recurring';
 
 const recurringInFlight = new Set<string>();
 
@@ -444,6 +444,8 @@ function RecurringRulesCard({
   showEnded,
   onToggleEnded,
   formatCurrency,
+  categoryOptions,
+  onSave,
 }: {
   rules: RecurringRule[];
   confirmEndRuleId: string | null;
@@ -452,8 +454,41 @@ function RecurringRulesCard({
   showEnded: boolean;
   onToggleEnded: () => void;
   formatCurrency: (value: number) => string;
+  categoryOptions: (type: string) => string[];
+  onSave: (rule: RecurringRule, edit: RuleEdit) => Promise<string | null>;
 }) {
   const now = new Date();
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<RuleEdit>({ description: '', amount: '', category: '', dayOfMonth: '', totalCount: '' });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = (rule: RecurringRule) => {
+    onAskEnd(null);
+    setEditError(null);
+    setEditingRuleId(rule.id);
+    setEdit({
+      description: rule.description || '',
+      amount: String(Number(rule.amount) || ''),
+      category: rule.category || '',
+      dayOfMonth: String(rule.dayOfMonth || ''),
+      totalCount: hasInstallments(rule) ? String(rule.totalCount) : '',
+    });
+  };
+
+  const saveEdit = async (rule: RecurringRule) => {
+    setSaving(true);
+    const error = await onSave(rule, edit);
+    setSaving(false);
+    if (error) {
+      setEditError(error);
+      return;
+    }
+    setEditingRuleId(null);
+  };
+
+  const inputClass = 'w-full px-3 py-2 text-sm bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-100';
+  const labelClass = 'block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1';
   const byName = (a: RecurringRule, b: RecurringRule) => (a.description || '').localeCompare(b.description || '');
   const active = rules.filter(isRuleActive).sort(byName);
   const ended = rules.filter((rule) => !isRuleActive(rule)).sort(byName);
@@ -480,7 +515,7 @@ function RecurringRulesCard({
           Automáticos mensuales
         </h2>
         {active.length > 0 && (
-          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">
+          <span className="shrink-0 whitespace-nowrap text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">
             {active.length} {active.length === 1 ? 'activo' : 'activos'}
           </span>
         )}
@@ -494,6 +529,111 @@ function RecurringRulesCard({
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {active.map((rule) => {
             const next = nextChargeDate(rule, now);
+            if (editingRuleId === rule.id) {
+              const options = categoryOptions(rule.type);
+              const categories = options.includes(rule.category) ? options : [rule.category, ...options];
+              const generated = rule.generatedCount ?? 1;
+              return (
+                <li key={rule.id} className="py-3 first:pt-0 last:pb-0">
+                  <form
+                    aria-label={`Editar ${rule.description}`}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      saveEdit(rule);
+                    }}
+                    className="space-y-3 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 p-3"
+                  >
+                    <div>
+                      <label className={labelClass} htmlFor={`edit-desc-${rule.id}`}>Descripción</label>
+                      <input
+                        id={`edit-desc-${rule.id}`}
+                        type="text"
+                        value={edit.description}
+                        onChange={(event) => setEdit({ ...edit, description: event.target.value })}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className={labelClass} htmlFor={`edit-amount-${rule.id}`}>Monto (ARS)</label>
+                        <input
+                          id={`edit-amount-${rule.id}`}
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          inputMode="decimal"
+                          value={edit.amount}
+                          onChange={(event) => setEdit({ ...edit, amount: event.target.value })}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass} htmlFor={`edit-day-${rule.id}`}>Día del mes</label>
+                        <input
+                          id={`edit-day-${rule.id}`}
+                          type="number"
+                          min="1"
+                          max="31"
+                          inputMode="numeric"
+                          value={edit.dayOfMonth}
+                          onChange={(event) => setEdit({ ...edit, dayOfMonth: event.target.value })}
+                          className={inputClass}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor={`edit-cat-${rule.id}`}>Categoría</label>
+                      <select
+                        id={`edit-cat-${rule.id}`}
+                        value={edit.category}
+                        onChange={(event) => setEdit({ ...edit, category: event.target.value })}
+                        className={inputClass}
+                      >
+                        {categories.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {hasInstallments(rule) && (
+                      <div>
+                        <label className={labelClass} htmlFor={`edit-total-${rule.id}`}>Cantidad de cuotas</label>
+                        <input
+                          id={`edit-total-${rule.id}`}
+                          type="number"
+                          min={Math.max(2, generated)}
+                          max={MAX_INSTALLMENTS}
+                          inputMode="numeric"
+                          value={edit.totalCount}
+                          onChange={(event) => setEdit({ ...edit, totalCount: event.target.value })}
+                          className={inputClass}
+                        />
+                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Ya se cargaron {generated}.</p>
+                      </div>
+                    )}
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Se aplica desde la próxima carga{next ? ` (${formatDayShort(next)})` : ''}. Lo que ya se cargó no cambia.
+                    </p>
+                    {editError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{editError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingRuleId(null)}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={saving}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 disabled:opacity-50"
+                      >
+                        {saving ? 'Guardando…' : 'Guardar'}
+                      </button>
+                    </div>
+                  </form>
+                </li>
+              );
+            }
             return (
               <li key={rule.id} className="py-3 first:pt-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
@@ -524,13 +664,27 @@ function RecurringRulesCard({
                       </button>
                     </>
                   ) : (
+                    <>
                     <button
                       type="button"
-                      onClick={() => onAskEnd(rule.id)}
+                      onClick={() => startEdit(rule)}
+                      aria-label={`Editar ${rule.description}`}
+                      className="inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200"
+                    >
+                      <Edit2 size={12} />
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingRuleId(null);
+                        onAskEnd(rule.id);
+                      }}
                       className="text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200"
                     >
                       Finalizar
                     </button>
+                    </>
                   )}
                 </div>
               </li>
@@ -1325,6 +1479,29 @@ export default function App() {
       console.error('Error ending recurring rule', error);
       showToast('No se pudo finalizar. Probá de nuevo.', 'error');
     }
+  };
+
+  const updateRecurringRule = async (rule: RecurringRule, edit: RuleEdit): Promise<string | null> => {
+    if (!user) return 'No hay sesión activa.';
+    const result = ruleEditUpdate(rule, edit, new Date());
+    if ('error' in result) return result.error;
+    try {
+      await persistSet(`users/${user.uid}/recurringTransactions/${rule.id}`, result.update, 'update');
+      showToast(
+        result.update.active === false
+          ? `«${result.update.description}» se terminó: ya tiene todas sus cuotas cargadas.`
+          : `«${result.update.description}» actualizado. Se aplica desde la próxima carga.`
+      );
+      return null;
+    } catch (error) {
+      console.error('Error updating recurring rule', error);
+      return 'No se pudo guardar. Probá de nuevo.';
+    }
+  };
+
+  const recurringCategoryOptions = (ruleType: string) => {
+    const key = ruleType as TransactionType;
+    return [...(DEFAULT_CATEGORIES[key] || []), ...(customCategories[key] || [])];
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -3165,6 +3342,8 @@ export default function App() {
               showEnded={showEndedRules}
               onToggleEnded={() => setShowEndedRules((current) => !current)}
               formatCurrency={formatCurrency}
+              categoryOptions={recurringCategoryOptions}
+              onSave={updateRecurringRule}
             />
           </div>
 
