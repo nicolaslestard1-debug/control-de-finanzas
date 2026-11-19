@@ -219,6 +219,13 @@ const DEFAULT_CATEGORIES: Record<TransactionType, string[]> = {
   saving: ['Plazo Fijo', 'FCI', 'Dólares', 'Efectivo', 'Otros'],
 };
 
+// "Otros" is the catch-all, so it stays at the bottom instead of mid-list.
+const sortCategories = (categories: string[]) =>
+  [...new Set(categories)].sort((a, b) => {
+    if (a === 'Otros' || b === 'Otros') return a === 'Otros' ? (b === 'Otros' ? 0 : 1) : -1;
+    return a.localeCompare(b, 'es', { sensitivity: 'base' });
+  });
+
 const getGroupedCategory = (category: string, type: TransactionType, description?: string) => {
   if (type === 'saving') {
     const desc = description?.toLowerCase() || '';
@@ -1501,7 +1508,7 @@ export default function App() {
 
   const recurringCategoryOptions = (ruleType: string) => {
     const key = ruleType as TransactionType;
-    return [...(DEFAULT_CATEGORIES[key] || []), ...(customCategories[key] || [])];
+    return sortCategories([...(DEFAULT_CATEGORIES[key] || []), ...(customCategories[key] || [])]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -3187,13 +3194,8 @@ export default function App() {
                         }}
                         className="block w-full pl-10 pr-3 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-100 focus:border-zinc-900 dark:focus:border-zinc-100 transition-all outline-none appearance-none"
                       >
-                        {DEFAULT_CATEGORIES[type].map((cat) => (
+                        {sortCategories([...DEFAULT_CATEGORIES[type], ...(customCategories[type] || [])]).map((cat) => (
                           <option key={cat} value={cat}>
-                            {cat}
-                          </option>
-                        ))}
-                        {(customCategories[type] || []).map((cat) => (
-                          <option key={`custom-${cat}`} value={cat}>
                             {cat}
                           </option>
                         ))}
