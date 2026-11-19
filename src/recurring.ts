@@ -129,6 +129,52 @@ export function lastInstallmentMonth(rule: RecurringRule): string | null {
   return addMonths(rule.lastProcessedMonth, (rule.totalCount as number) - (rule.generatedCount ?? 1));
 }
 
+export type RuleEdit = {
+  description: string;
+  amount: string;
+  category: string;
+  dayOfMonth: string;
+  totalCount: string;
+};
+
+export const MAX_INSTALLMENTS = 120;
+
+// Only future charges read the rule, so entries already saved keep their old values.
+export function ruleEditUpdate(
+  rule: RecurringRule,
+  edit: RuleEdit,
+  now: Date
+): { update: Record<string, unknown> } | { error: string } {
+  const amount = Number(edit.amount.replace(',', '.'));
+  if (!Number.isFinite(amount) || amount <= 0) return { error: 'Poné un monto mayor a 0.' };
+  const category = edit.category.trim();
+  if (!category) return { error: 'Elegí una categoría.' };
+  const day = Number(edit.dayOfMonth);
+  if (!Number.isInteger(day) || day < 1 || day > 31) return { error: 'El día tiene que ser entre 1 y 31.' };
+
+  const update: Record<string, unknown> = {
+    description: edit.description.trim() || category,
+    amount,
+    category,
+    dayOfMonth: day,
+  };
+
+  if (hasInstallments(rule)) {
+    const generated = rule.generatedCount ?? 1;
+    const minimum = Math.max(2, generated);
+    const total = Number(edit.totalCount);
+    if (!Number.isInteger(total) || total < minimum || total > MAX_INSTALLMENTS) {
+      return { error: `Las cuotas tienen que ser entre ${minimum} y ${MAX_INSTALLMENTS}.` };
+    }
+    update.totalCount = total;
+    if (generated >= total) {
+      update.active = false;
+      update.endedAt = now.toISOString();
+    }
+  }
+  return { update };
+}
+
 const SHORT_MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
 export function formatMonthShort(month: string): string {
