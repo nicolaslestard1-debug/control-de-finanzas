@@ -28,9 +28,19 @@ async function readStore() {
   }
 }
 
-async function writeStore(data: unknown) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(dataFile, JSON.stringify(data, null, 2), 'utf8');
+// The browser fires several PUTs back to back; overlapping writeFile calls
+// to the same path can interleave and leave invalid JSON behind.
+let writeQueue: Promise<void> = Promise.resolve();
+
+function writeStore(data: unknown) {
+  const next = writeQueue.then(async () => {
+    await fs.mkdir(dataDir, { recursive: true });
+    const tmpFile = `${dataFile}.tmp`;
+    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
+    await fs.rename(tmpFile, dataFile);
+  });
+  writeQueue = next.catch(() => {});
+  return next;
 }
 
 function lanUrls(port: number) {

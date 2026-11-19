@@ -45,6 +45,104 @@ export function shouldGenerateRecurring(lastProcessedMonth: unknown, dayOfMonth:
   return now.getDate() >= Math.min(day, lastDay);
 }
 
+export type RecurringRule = {
+  id: string;
+  type: string;
+  amount: number;
+  category: string;
+  description: string;
+  dayOfMonth: number;
+  lastProcessedMonth?: string;
+  totalCount?: number;
+  generatedCount?: number;
+  active?: boolean;
+  endedAt?: string;
+};
+
+const MONTH = /^\d{4}-\d{2}$/;
+const MAX_CATCH_UP = 24;
+
+export function addMonths(month: string, count: number): string {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const next = new Date(year, monthNumber - 1 + count, 1);
+  return calendarMonth(next);
+}
+
+export function hasInstallments(rule: Pick<RecurringRule, 'totalCount'>): boolean {
+  return typeof rule.totalCount === 'number' && rule.totalCount > 0;
+}
+
+export function isRuleActive(rule: RecurringRule): boolean {
+  if (rule.active === false) return false;
+  if (hasInstallments(rule) && (rule.generatedCount ?? 1) >= (rule.totalCount as number)) return false;
+  return true;
+}
+
+function dayReached(month: string, dayOfMonth: number, now: Date): boolean {
+  return now.getDate() >= Number(chargeDate(month, dayOfMonth).slice(8));
+}
+
+// Installment plans catch up on months that already passed so the count stays right.
+// Plans without an end keep the original behavior and only charge the current month.
+export function dueMonths(rule: RecurringRule, now: Date): string[] {
+  if (!isRuleActive(rule)) return [];
+  const day = Number(rule.dayOfMonth);
+  if (!Number.isFinite(day) || day < 1) return [];
+
+  if (!hasInstallments(rule)) {
+    return shouldGenerateRecurring(rule.lastProcessedMonth, day, now) ? [calendarMonth(now)] : [];
+  }
+
+  const current = calendarMonth(now);
+  const last = typeof rule.lastProcessedMonth === 'string' && MONTH.test(rule.lastProcessedMonth) ? rule.lastProcessedMonth : '';
+  const remaining = (rule.totalCount as number) - (rule.generatedCount ?? 1);
+  const months: string[] = [];
+  let month = last ? addMonths(last, 1) : current;
+  while (month <= current && months.length < remaining && months.length < MAX_CATCH_UP) {
+    if (month === current && !dayReached(month, day, now)) break;
+    months.push(month);
+    month = addMonths(month, 1);
+  }
+  return months;
+}
+
+export function installmentTag(number: number, total: number): string {
+  return `cuota ${number}/${total}`;
+}
+
+export function automaticDescription(base: string, installment?: { number: number; total: number }): string {
+  if (!installment) return `${base} (Automático)`;
+  return `${base} · ${installmentTag(installment.number, installment.total)} (Automático)`;
+}
+
+export function nextChargeDate(rule: RecurringRule, now: Date): string | null {
+  if (!isRuleActive(rule)) return null;
+  const current = calendarMonth(now);
+  const last = typeof rule.lastProcessedMonth === 'string' && MONTH.test(rule.lastProcessedMonth) ? rule.lastProcessedMonth : '';
+  let month = last ? addMonths(last, 1) : current;
+  if (month < current) month = current;
+  return chargeDate(month, Number(rule.dayOfMonth));
+}
+
+export function lastInstallmentMonth(rule: RecurringRule): string | null {
+  if (!hasInstallments(rule) || !rule.lastProcessedMonth || !MONTH.test(rule.lastProcessedMonth)) return null;
+  return addMonths(rule.lastProcessedMonth, (rule.totalCount as number) - (rule.generatedCount ?? 1));
+}
+
+const SHORT_MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+export function formatMonthShort(month: string): string {
+  if (!MONTH.test(month)) return '';
+  const [year, monthNumber] = month.split('-').map(Number);
+  return `${SHORT_MONTHS[monthNumber - 1]} ${year}`;
+}
+
+export function formatDayShort(iso: string): string {
+  const match = ISO_DATE.exec(iso);
+  if (!match) return '';
+  return `${Number(match[3])} ${SHORT_MONTHS[Number(match[2]) - 1]} ${match[1]}`;
+}
+
 function createdAtMs(value: unknown): number {
   if (!value) return 0;
   if (typeof value === 'number') return value;
