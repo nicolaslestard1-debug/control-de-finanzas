@@ -12,7 +12,7 @@ import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuth
 import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, getDocFromServer, runTransaction } from 'firebase/firestore';
 import { LOCAL_USER, isLocalUser, enableLocalMode, subscribeLocal, readLocal, writeLocal, deleteLocal, hydrateFromServer } from './localStore';
 import { formatPeriodLabel, isRangeInvalid, parsePinnedPeriod, PINNED_PERIOD_KEY, transactionInPeriod, type PinnedPeriod, type TimeFilter } from './periodFilter';
-import { automaticDuplicateIds, calendarMonth, chargeDate, dayFromIsoDate, monthFromIsoDate, recurringChargeId, shouldGenerateRecurring } from './recurring';
+import { automaticDescription, automaticDuplicateIds, chargeDate, dayFromIsoDate, dueMonths, formatDayShort, formatMonthShort, hasInstallments, installmentTag, isRuleActive, lastInstallmentMonth, monthFromIsoDate, nextChargeDate, recurringChargeId, type RecurringRule } from './recurring';
 
 const recurringInFlight = new Set<string>();
 
@@ -436,6 +436,143 @@ function PeriodFilter({
   );
 }
 
+function RecurringRulesCard({
+  rules,
+  confirmEndRuleId,
+  onAskEnd,
+  onEnd,
+  showEnded,
+  onToggleEnded,
+  formatCurrency,
+}: {
+  rules: RecurringRule[];
+  confirmEndRuleId: string | null;
+  onAskEnd: (id: string | null) => void;
+  onEnd: (rule: RecurringRule) => void;
+  showEnded: boolean;
+  onToggleEnded: () => void;
+  formatCurrency: (value: number) => string;
+}) {
+  const now = new Date();
+  const byName = (a: RecurringRule, b: RecurringRule) => (a.description || '').localeCompare(b.description || '');
+  const active = rules.filter(isRuleActive).sort(byName);
+  const ended = rules.filter((rule) => !isRuleActive(rule)).sort(byName);
+
+  const amountText = (rule: RecurringRule) => {
+    const sign = rule.type === 'income' || rule.type === 'refund' ? '+' : '-';
+    const color = rule.type === 'income' || rule.type === 'refund' ? 'text-emerald-600 dark:text-emerald-400' : rule.type === 'saving' ? 'text-violet-600 dark:text-violet-400' : 'text-rose-600 dark:text-rose-400';
+    return <span className={`text-sm font-semibold whitespace-nowrap ${color}`}>{sign}{formatCurrency(Number(rule.amount) || 0)}</span>;
+  };
+
+  const scheduleText = (rule: RecurringRule) => {
+    if (hasInstallments(rule)) {
+      const lastMonth = lastInstallmentMonth(rule);
+      return `Cuota ${rule.generatedCount ?? 1} de ${rule.totalCount}${lastMonth ? ` · última en ${formatMonthShort(lastMonth)}` : ''}`;
+    }
+    return `Todos los meses · día ${rule.dayOfMonth}`;
+  };
+
+  return (
+    <div className="mt-6 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-200 dark:border-zinc-800 p-6">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <RefreshCcw size={18} className="text-zinc-500 dark:text-zinc-400" />
+          Automáticos mensuales
+        </h2>
+        {active.length > 0 && (
+          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full">
+            {active.length} {active.length === 1 ? 'activo' : 'activos'}
+          </span>
+        )}
+      </div>
+
+      {active.length === 0 ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          No tenés movimientos automáticos activos. Para crear uno, marcá «Hacer recurrente» al cargar un movimiento.
+        </p>
+      ) : (
+        <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          {active.map((rule) => {
+            const next = nextChargeDate(rule, now);
+            return (
+              <li key={rule.id} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">{rule.description}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">{rule.category} · {scheduleText(rule)}</p>
+                    {next && <p className="text-xs text-zinc-500 dark:text-zinc-400">Próximo: {formatDayShort(next)}</p>}
+                  </div>
+                  {amountText(rule)}
+                </div>
+                <div className="mt-2 flex items-center justify-end gap-2">
+                  {confirmEndRuleId === rule.id ? (
+                    <>
+                      <span className="text-xs text-zinc-600 dark:text-zinc-300 mr-auto">¿Dejar de cargarlo? Lo ya cargado queda.</span>
+                      <button
+                        type="button"
+                        onClick={() => onAskEnd(null)}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200"
+                      >
+                        No
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onEnd(rule)}
+                        className="text-xs font-medium px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white"
+                      >
+                        Sí, finalizar
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onAskEnd(rule.id)}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-200"
+                    >
+                      Finalizar
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {ended.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={onToggleEnded}
+            aria-expanded={showEnded}
+            className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+          >
+            <ChevronDown size={14} className={`transition-transform ${showEnded ? 'rotate-180' : ''}`} />
+            {showEnded ? 'Ocultar finalizados' : `Ver finalizados (${ended.length})`}
+          </button>
+          {showEnded && (
+            <ul className="mt-2 space-y-2">
+              {ended.map((rule) => (
+                <li key={rule.id} className="flex items-start justify-between gap-3 opacity-70">
+                  <div className="min-w-0">
+                    <p className="text-sm text-zinc-700 dark:text-zinc-300 truncate">{rule.description}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {hasInstallments(rule) && (rule.generatedCount ?? 1) >= (rule.totalCount as number)
+                        ? `Terminó · ${rule.totalCount} cuotas`
+                        : 'Finalizado'}
+                    </p>
+                  </div>
+                  {amountText(rule)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -496,6 +633,11 @@ export default function App() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isRecurring, setIsRecurring] = useState(false);
+  const [recurringMode, setRecurringMode] = useState<'forever' | 'installments'>('forever');
+  const [installmentCount, setInstallmentCount] = useState('6');
+  const [recurringRules, setRecurringRules] = useState<RecurringRule[]>([]);
+  const [confirmEndRuleId, setConfirmEndRuleId] = useState<string | null>(null);
+  const [showEndedRules, setShowEndedRules] = useState(false);
   const [showMPModal, setShowMPModal] = useState(false);
   const [isMPLinked, setIsMPLinked] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -914,43 +1056,98 @@ export default function App() {
 
   // Recurring Transactions Processor
   useEffect(() => {
-    if (!isAuthReady || !user || isLocalUser(user)) return;
+    if (!isAuthReady || !user) {
+      setRecurringRules([]);
+      return;
+    }
 
     const recurringPath = `users/${user.uid}/recurringTransactions`;
+
+    const chargesFor = (rule: RecurringRule, months: string[]) => {
+      const startNumber = (rule.generatedCount ?? 1) + 1;
+      return months.map((month, index) => ({
+        id: recurringChargeId(rule.id, month),
+        data: {
+          userId: user.uid,
+          type: rule.type,
+          amount: rule.amount,
+          category: rule.category,
+          description: automaticDescription(
+            rule.description,
+            hasInstallments(rule) ? { number: startNumber + index, total: rule.totalCount as number } : undefined
+          ),
+          date: chargeDate(month, Number(rule.dayOfMonth)),
+          recurringId: rule.id,
+          createdAt: serverTimestamp()
+        }
+      }));
+    };
+
+    const ruleUpdate = (rule: RecurringRule, months: string[]): Record<string, unknown> => {
+      const update: Record<string, unknown> = { lastProcessedMonth: months[months.length - 1] };
+      if (hasInstallments(rule)) {
+        const generated = (rule.generatedCount ?? 1) + months.length;
+        update.generatedCount = generated;
+        if (generated >= (rule.totalCount as number)) {
+          update.active = false;
+          update.endedAt = new Date().toISOString();
+        }
+      }
+      return update;
+    };
+
+    if (isLocalUser(user)) {
+      const readRules = () =>
+        Object.values(readLocal().recurring).map((row) => ({ ...row, id: String(row.id) })) as RecurringRule[];
+      // writeLocal notifies subscribers synchronously, so guard against re-entering.
+      let processing = false;
+      const runLocal = () => {
+        if (processing) return;
+        processing = true;
+        try {
+          const now = new Date();
+          for (const rule of readRules()) {
+            const months = dueMonths(rule, now);
+            if (months.length === 0) continue;
+            writeLocal(`${recurringPath}/${rule.id}`, ruleUpdate(rule, months), 'update');
+            for (const charge of chargesFor(rule, months)) {
+              writeLocal(`users/${user.uid}/transactions/${charge.id}`, charge.data);
+            }
+          }
+        } finally {
+          processing = false;
+        }
+        setRecurringRules(readRules());
+      };
+      runLocal();
+      return subscribeLocal(runLocal);
+    }
+
     const q = query(collection(db, recurringPath));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const now = new Date();
-        if (!shouldGenerateRecurring(data.lastProcessedMonth, data.dayOfMonth, now)) return;
+      const rules = snapshot.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id }) as RecurringRule);
+      setRecurringRules(rules);
 
-        const month = calendarMonth(now);
-        const flightKey = `${user.uid}:${docSnap.id}:${month}`;
+      rules.forEach((rule) => {
+        if (dueMonths(rule, new Date()).length === 0) return;
+
+        const flightKey = `${user.uid}:${rule.id}`;
         if (recurringInFlight.has(flightKey)) return;
         recurringInFlight.add(flightKey);
 
-        const recurringRef = doc(db, recurringPath, docSnap.id);
-        const txRef = doc(db, `users/${user.uid}/transactions/${recurringChargeId(docSnap.id, month)}`);
+        const recurringRef = doc(db, recurringPath, rule.id);
 
         runTransaction(db, async (transaction) => {
           const fresh = await transaction.get(recurringRef);
           if (!fresh.exists()) return;
-          const freshData = fresh.data();
-          const freshNow = new Date();
-          if (!shouldGenerateRecurring(freshData.lastProcessedMonth, freshData.dayOfMonth, freshNow)) return;
-          const freshMonth = calendarMonth(freshNow);
-          transaction.set(txRef, {
-            userId: user.uid,
-            type: freshData.type,
-            amount: freshData.amount,
-            category: freshData.category,
-            description: `${freshData.description} (Automático)`,
-            date: chargeDate(freshMonth, Number(freshData.dayOfMonth)),
-            recurringId: docSnap.id,
-            createdAt: serverTimestamp()
-          });
-          transaction.update(recurringRef, { lastProcessedMonth: freshMonth });
+          const freshRule = { ...fresh.data(), id: rule.id } as RecurringRule;
+          const months = dueMonths(freshRule, new Date());
+          if (months.length === 0) return;
+          for (const charge of chargesFor(freshRule, months)) {
+            transaction.set(doc(db, `users/${user.uid}/transactions/${charge.id}`), charge.data);
+          }
+          transaction.update(recurringRef, ruleUpdate(freshRule, months));
         }).catch((error) => {
           console.error("Error processing recurring transaction", error);
         }).finally(() => {
@@ -1109,6 +1306,27 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const parsedInstallments = (() => {
+    const value = Number(installmentCount);
+    return Number.isInteger(value) && value >= 2 && value <= 120 ? value : null;
+  })();
+
+  const endRecurringRule = async (rule: RecurringRule) => {
+    if (!user) return;
+    try {
+      await persistSet(
+        `users/${user.uid}/recurringTransactions/${rule.id}`,
+        { active: false, endedAt: new Date().toISOString() },
+        'update'
+      );
+      setConfirmEndRuleId(null);
+      showToast(`«${rule.description}» ya no se va a cargar más. Lo que ya se cargó queda.`, 'info');
+    } catch (error) {
+      console.error('Error ending recurring rule', error);
+      showToast('No se pudo finalizar. Probá de nuevo.', 'error');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !amount || isNaN(Number(amount)) || Number(amount) <= 0) return;
@@ -1160,12 +1378,18 @@ export default function App() {
       } else {
         const txId = crypto.randomUUID();
         const txPath = `users/${user.uid}/transactions/${txId}`;
+        const baseDescription = description || 'Sin descripción';
+        const totalInstallments = isRecurring && recurringMode === 'installments' ? parsedInstallments : null;
+        if (isRecurring && recurringMode === 'installments' && !totalInstallments) {
+          showToast('Poné una cantidad de cuotas entre 2 y 120.', 'error');
+          return;
+        }
         await persistSet(txPath, {
           userId: user.uid,
           type: finalType,
           amount: finalAmount,
           category: finalCategory,
-          description: description || 'Sin descripción',
+          description: totalInstallments ? `${baseDescription} · ${installmentTag(1, totalInstallments)}` : baseDescription,
           date,
           createdAt: serverTimestamp()
         });
@@ -1177,13 +1401,20 @@ export default function App() {
             type: finalType,
             amount: finalAmount,
             category: finalCategory,
-            description: description || 'Sin descripción',
+            description: baseDescription,
             dayOfMonth: dayFromIsoDate(date),
             lastProcessedMonth: monthFromIsoDate(date),
+            active: true,
+            ...(totalInstallments ? { totalCount: totalInstallments, generatedCount: 1 } : {}),
             createdAt: serverTimestamp()
           });
         }
-        showToast('¡Transacción agregada con éxito!', 'success');
+        showToast(
+          totalInstallments
+            ? `¡Listo! Cuota 1 de ${totalInstallments} cargada. Las siguientes se agregan solas cada mes.`
+            : '¡Transacción agregada con éxito!',
+          'success'
+        );
       }
       
       setAmount('');
@@ -1192,6 +1423,8 @@ export default function App() {
       setRateType('blue');
       setCustomRate('');
       setIsRecurring(false);
+      setRecurringMode('forever');
+      setInstallmentCount('6');
       if (isCustomCategory) {
         setCategory(finalCategory);
         setIsCustomCategory(false);
@@ -2830,17 +3063,72 @@ export default function App() {
                 </div>
 
                 {!editingId && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <input
-                      type="checkbox"
-                      id="recurring"
-                      checked={isRecurring}
-                      onChange={(e) => setIsRecurring(e.target.checked)}
-                      className="w-4 h-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:checked:bg-zinc-100"
-                    />
-                    <label htmlFor="recurring" className="text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
-                      Hacer recurrente (mensual)
-                    </label>
+                  <div className="mt-2 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="recurring"
+                        checked={isRecurring}
+                        onChange={(e) => setIsRecurring(e.target.checked)}
+                        className="w-4 h-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:checked:bg-zinc-100"
+                      />
+                      <label htmlFor="recurring" className="text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
+                        Hacer recurrente (mensual)
+                      </label>
+                    </div>
+
+                    {isRecurring && (
+                      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 p-3 space-y-3">
+                        <div className="grid grid-cols-2 gap-1 p-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg" role="radiogroup" aria-label="Duración">
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={recurringMode === 'forever'}
+                            onClick={() => setRecurringMode('forever')}
+                            className={`py-1.5 text-xs font-medium rounded-md transition-colors ${
+                              recurringMode === 'forever' ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'
+                            }`}
+                          >
+                            Todos los meses
+                          </button>
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={recurringMode === 'installments'}
+                            onClick={() => setRecurringMode('installments')}
+                            className={`py-1.5 text-xs font-medium rounded-md transition-colors ${
+                              recurringMode === 'installments' ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'
+                            }`}
+                          >
+                            En cuotas
+                          </button>
+                        </div>
+
+                        {recurringMode === 'installments' && (
+                          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                            Cantidad de cuotas
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={2}
+                              max={120}
+                              step={1}
+                              value={installmentCount}
+                              onChange={(e) => setInstallmentCount(e.target.value)}
+                              className="mt-1 block w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-100"
+                            />
+                          </label>
+                        )}
+
+                        <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+                          {recurringMode === 'installments'
+                            ? parsedInstallments
+                              ? `El monto es por cuota. Esta carga es la cuota 1 de ${parsedInstallments}; las otras ${parsedInstallments - 1} se agregan el día ${dayFromIsoDate(date) || '—'} de cada mes y después se termina sola. Si la fecha es de un mes anterior, también se cargan las cuotas que ya pasaron.`
+                              : 'Poné entre 2 y 120 cuotas.'
+                            : `Se agrega el día ${dayFromIsoDate(date) || '—'} de cada mes hasta que lo finalices.`}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2868,6 +3156,16 @@ export default function App() {
                 </div>
               </form>
             </div>
+
+            <RecurringRulesCard
+              rules={recurringRules}
+              confirmEndRuleId={confirmEndRuleId}
+              onAskEnd={setConfirmEndRuleId}
+              onEnd={endRecurringRule}
+              showEnded={showEndedRules}
+              onToggleEnded={() => setShowEndedRules((current) => !current)}
+              formatCurrency={formatCurrency}
+            />
           </div>
 
           {/* Transactions List Section */}
