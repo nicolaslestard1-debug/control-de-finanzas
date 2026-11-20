@@ -242,7 +242,7 @@ const getGroupedCategory = (category: string, type: TransactionType, description
     return category;
   }
   
-  const social = ['Comida social', 'Shows', 'Recreativo', 'Salidas', 'Cine', 'Teatro', 'Restaurante', 'Bar'];
+  const social = ['Social', 'Shows', 'Recreativo', 'Salidas', 'Cine', 'Teatro', 'Restaurante', 'Bar'];
   const transporte = ['Transporte', 'Uber', 'Nafta', 'Combustible', 'Taxi', 'Cabify', 'Estacionamiento'];
   
   const catLower = category.toLowerCase();
